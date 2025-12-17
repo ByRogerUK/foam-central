@@ -33,8 +33,51 @@ function normalizePath(p: string): string {
 
 function getNotesFolder(): string | undefined {
   const config = vscode.workspace.getConfiguration('foamCentral');
-  const folder = config.get<string>('notesFolder');
-  return folder && folder.trim().length > 0 ? folder.trim() : undefined;
+  let folder = config.get<string>('notesFolder');
+
+  // If user has already set it, respect that.
+  if (folder && folder.trim().length > 0) {
+    return folder.trim();
+  }
+
+  // Try to infer a sensible default.
+  // Prefer OneDrive if available, otherwise fall back to HOME/USERPROFILE.
+  const oneDrive =
+    process.env.OneDrive ||
+    process.env.ONE_DRIVE ||
+    process.env.ONEDRIVE;
+
+  const base =
+    oneDrive ||
+    process.env.USERPROFILE ||
+    process.env.HOME;
+
+  if (!base) {
+    vscode.window.showErrorMessage(
+      'Foam Central: notesFolder is not set and no default location could be inferred. Please set "foamCentral.notesFolder" in Settings.'
+    );
+    return undefined;
+  }
+
+  // Default folder name under the base path
+  folder = path.join(base, 'foam-notes');
+
+  // Persist this as the global default so next time it’s already set.
+  config
+    .update('notesFolder', folder, vscode.ConfigurationTarget.Global)
+    .then(
+      () => {
+        // optional: log to output channel if you want
+        if (logChannel) {
+          logChannel.appendLine(`Foam Central: notesFolder defaulted to ${folder}`);
+        }
+      },
+      (err) => {
+        console.error('Foam Central: failed to update notesFolder setting', err);
+      }
+    );
+
+  return folder;
 }
 
 function getProjectNotesFolderName(): string {
@@ -415,37 +458,23 @@ async function initProjectTelemetry(): Promise<void> {
     'initProjectTelemetry: workspaceFolders=' +
     JSON.stringify(folders?.map(f => f.uri.fsPath))
   );
-  if (!folders || folders.length < 2) {
-    logChannel.appendLine('initProjectTelemetry: need at least notes + project folder');
+  if (!folders || folders.length === 0) {
+    logChannel.appendLine('initProjectTelemetry: no workspace folders, nothing to do');
     return;
   }
 
   const notesNorm = normalizePath(notesFolder);
 
-  const notesIndex = folders.findIndex(
-    f => normalizePath(f.uri.fsPath) === notesNorm
-  );
-  logChannel.appendLine('initProjectTelemetry: notesIndex=' + String(notesIndex));
-
-  if (notesIndex === -1) {
-    logChannel.appendLine('initProjectTelemetry: notes folder not found in workspace');
-    vscode.window.showInformationMessage(
-      'Foam Central: notes folder not found in this workspace. ' +
-      'Open the project folder alone and run "Foam Central: Create Workspace for Current Folder".'
-    );
-    return;
-  }
-
-  // pick the first folder that is NOT the notes folder as the project
-  const projectFolder = folders.find((f, i) => i !== notesIndex);
-  if (!projectFolder) {
-    logChannel.appendLine('initProjectTelemetry: no project folder found');
-    return;
+  // Prefer a folder that is NOT the notes folder, if present.
+  let projectFolder = folders[0];
+  const nonNotes = folders.find(f => normalizePath(f.uri.fsPath) !== notesNorm);
+  if (nonNotes) {
+    projectFolder = nonNotes;
   }
 
   const projectFolderPath = projectFolder.uri.fsPath;
   const projectName = path.basename(projectFolderPath);
-  const slug = projectName.replace(/\s+/g, '_'); // use underscores for slug
+  const slug = projectName.replace(/\s+/g, '_');
 
   const projectNotesRoot = path.join(notesFolder, getProjectNotesFolderName(), slug);
   const homePath = path.join(projectNotesRoot, 'home.md');
@@ -467,6 +496,7 @@ async function initProjectTelemetry(): Promise<void> {
   await logProjectOpen(currentProject);
   setupGitLoggingForProject(currentProject);
 }
+
 
 /* ---------- Daily note scheduler ---------- */
 
