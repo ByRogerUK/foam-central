@@ -57,5 +57,12 @@
     "@types/vscode": "^1.90.0",
     "typescript": "^5.4.0",
     "@vscode/vsce": "^3.0.0"
-  }
+  },
+  "files": [
+    "out",
+    "package.json",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ]
 }
