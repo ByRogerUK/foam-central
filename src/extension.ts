@@ -290,16 +290,17 @@ async function logProjectOpen(info: ProjectInfo): Promise<void> {
 
   try {
     const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(info.homePath));
-    const text = `\n- ${dateStr} [[${dailySlug}]] opened at ${timeStr}\n`;
+    const text = `\n- [[${dailySlug}|${dateStr}]] opened at ${timeStr}\n`;
     const edit = new vscode.WorkspaceEdit();
     const lastLine = doc.lineAt(doc.lineCount - 1);
     edit.insert(doc.uri, lastLine.range.end, text);
     await vscode.workspace.applyEdit(edit);
-      await doc.save();
+    await doc.save();
   } catch (err) {
     console.error('Foam Central: failed to log open in home.md', err);
   }
 }
+
 
 /* ---------- Git integration ---------- */
 
