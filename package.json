@@ -1,0 +1,60 @@
+{
+  "name": "foam-central",
+  "displayName": "Foam Central Workspace Helper",
+  "description": "Central Foam notes + per-project journals and VCS log.",
+  "version": "0.1.0",
+  "publisher": "byroger",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:foam-central.createWorkspaceForCurrentFolder"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "foam-central.createWorkspaceForCurrentFolder",
+        "title": "Foam Central: Create Workspace for Current Folder",
+        "category": "Foam Central"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Foam Central",
+      "properties": {
+        "foamCentral.notesFolder": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to your central Foam notes folder (the Foam workspace root)."
+        },
+        "foamCentral.projectNotesFolder": {
+          "type": "string",
+          "default": "projects",
+          "description": "Relative folder inside the notes workspace where project folders are stored."
+        }
+      }
+    }
+  },
+  "extensionDependencies": [
+    "foam.foam-vscode",
+    "vscode.git"
+  ],
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0",
+    "@vscode/vsce": "^3.0.0"
+  }
+}
