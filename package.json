@@ -2,9 +2,11 @@
   "name": "foam-central",
   "displayName": "Foam Central Workspace Helper",
   "description": "Central Foam notes + per-project journals and VCS log.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "byroger",
   "repository": "https://github.com/ByRogerUK/foam-central",
+  "license": "GPL-2.0-only",
+  "icon": "images/icon.png",
   "engines": {
     "vscode": "^1.90.0"
   },
