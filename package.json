@@ -65,6 +65,7 @@
     "package.json",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "images/icon.png"
   ]
 }
