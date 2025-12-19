@@ -1,6 +1,9 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import * as fs from 'fs/promises';
+import * as fs from 'fs'; 
+import * as fsp from 'fs/promises';
+import * as cp from 'child_process';
+import * as os from 'os';
 
 interface ProjectInfo {
   name: string;       // project directory name (e.g. "story_engine2")
@@ -20,9 +23,19 @@ interface VcsEvent {
   upstreamName: string;
 }
 
+type GitAPI = {
+  repositories: any[];
+};
+
 let currentProject: ProjectInfo | undefined;
 let dailyNoteTimer: NodeJS.Timeout | undefined;
 let logChannel: vscode.OutputChannel;
+let notesGitRoot: string | undefined;
+let notesDirty = false;
+let notesSaveCount = 0;
+let notesLastSyncTime = Date.now();
+let notesSyncInProgress = false;
+let notesSyncTimer: NodeJS.Timeout | undefined;
 const repoHeads = new Map<any, string | undefined>();
 
 /* ---------- Small helpers ---------- */
@@ -92,6 +105,45 @@ function formatTime(date: Date): string {
   return `${h}:${m}`;
 }
 
+function runGit(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    cp.execFile('git', args, { cwd }, (err, stdout, stderr) => {
+      if (err) {
+        const e: any = err;
+        e.stdout = stdout;
+        e.stderr = stderr;
+        reject(e);
+      } else {
+        resolve({ stdout, stderr });
+      }
+    });
+  });
+}
+
+function findGitRoot(startPath: string): string | undefined {
+  let current = path.resolve(startPath);
+
+  // Walk up until we find .git or hit filesystem root
+  while (true) {
+    const gitPath = path.join(current, '.git');
+    try {
+      if (fs.existsSync(gitPath)) {
+        return current;
+      }
+    } catch {
+      // ignore
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+
+  return undefined;
+}
+
 /* ---------- Command: create workspace for current folder ---------- */
 
 async function createWorkspaceForCurrentFolder(): Promise<void> {
@@ -135,7 +187,7 @@ async function createWorkspaceForCurrentFolder(): Promise<void> {
   const workspaceFilePath = path.join(projectFolder, workspaceFileName);
 
   try {
-    await fs.writeFile(
+    await fsp.writeFile(
       workspaceFilePath,
       JSON.stringify(workspace, null, 2),
       { encoding: 'utf8' }
@@ -164,11 +216,11 @@ async function ensureDailyNoteFile(notesFolder: string, date: Date): Promise<{ s
   const slug = getDailyNoteSlug(date);
   const journalsDir = path.join(notesFolder, 'journals');
 
-  await fs.mkdir(journalsDir, { recursive: true });
+  await fsp.mkdir(journalsDir, { recursive: true });
 
   const filePath = path.join(journalsDir, `${slug}.md`);
   try {
-    await fs.access(filePath);
+    await fsp.access(filePath);
   } catch {
     const content = [
       '---',
@@ -180,7 +232,7 @@ async function ensureDailyNoteFile(notesFolder: string, date: Date): Promise<{ s
       '## Log',
       ''
     ].join('\n');
-    await fs.writeFile(filePath, content, { encoding: 'utf8' });
+    await fsp.writeFile(filePath, content, { encoding: 'utf8' });
   }
 
   return { slug, uri: vscode.Uri.file(filePath) };
@@ -229,7 +281,7 @@ async function ensureProjectFiles(notesFolder: string, info: ProjectInfo): Promi
   const projectRootInNotes = path.dirname(info.homePath);
 
   try {
-    await fs.mkdir(projectRootInNotes, { recursive: true });
+    await fsp.mkdir(projectRootInNotes, { recursive: true });
   } catch (err) {
     console.error('Foam Central: failed to create project dir', err);
     return;
@@ -237,7 +289,7 @@ async function ensureProjectFiles(notesFolder: string, info: ProjectInfo): Promi
 
   // home.md
   try {
-    await fs.access(info.homePath);
+    await fsp.access(info.homePath);
   } catch {
     const now = new Date();
     const contentLines = [
@@ -255,12 +307,12 @@ async function ensureProjectFiles(notesFolder: string, info: ProjectInfo): Promi
       '## Activity',
       ''
     ];
-    await fs.writeFile(info.homePath, contentLines.join('\n'), { encoding: 'utf8' });
+    await fsp.writeFile(info.homePath, contentLines.join('\n'), { encoding: 'utf8' });
   }
 
   // vcs.md
   try {
-    await fs.access(info.vcsPath);
+    await fsp.access(info.vcsPath);
   } catch {
     const contentLines = [
       '---',
@@ -271,7 +323,7 @@ async function ensureProjectFiles(notesFolder: string, info: ProjectInfo): Promi
       `# VCS log for ${info.name}`,
       ''
     ];
-    await fs.writeFile(info.vcsPath, contentLines.join('\n'), { encoding: 'utf8' });
+    await fsp.writeFile(info.vcsPath, contentLines.join('\n'), { encoding: 'utf8' });
   }
 }
 
@@ -303,10 +355,6 @@ async function logProjectOpen(info: ProjectInfo): Promise<void> {
 
 
 /* ---------- Git integration ---------- */
-
-type GitAPI = {
-  repositories: any[];
-};
 
 function getGitAPI(): GitAPI | undefined {
   const gitExt = vscode.extensions.getExtension<any>('vscode.git');
@@ -544,9 +592,241 @@ async function startDailyNoteScheduler(): Promise<void> {
   scheduleNext();
 }
 
+/* ----------- Git support ----------------*/
+
+async function initNotesGitSync(notesFolder: string, context: vscode.ExtensionContext): Promise<void> {
+  const config = vscode.workspace.getConfiguration('foamCentral');
+  const autoEnabled = config.get<boolean>('notesGit.autoSyncEnabled') ?? false;
+  if (!autoEnabled) {
+    logChannel.appendLine('Foam Central: notes Git auto-sync disabled in settings.');
+    return;
+  }
+
+  const root = findGitRoot(notesFolder);
+  if (!root) {
+    logChannel.appendLine('Foam Central: notes folder is not inside a Git repo; skipping auto-sync.');
+    return;
+  }
+
+  notesGitRoot = root;
+  notesDirty = false;
+  notesSaveCount = 0;
+  notesLastSyncTime = Date.now();
+  notesSyncInProgress = false;
+
+  logChannel.appendLine(`Foam Central: notes Git root = ${notesGitRoot}`);
+
+  // Watch saves in notes folder
+  const notesNorm = normalizePath(notesFolder);
+  const saveDisposable = vscode.workspace.onDidSaveTextDocument(doc => {
+    if (doc.uri.scheme !== 'file') return;
+    const fsPath = normalizePath(doc.uri.fsPath);
+    if (!fsPath.startsWith(notesNorm)) return;
+
+    const cfg = vscode.workspace.getConfiguration('foamCentral');
+    if (!cfg.get<boolean>('notesGit.autoSyncEnabled')) return;
+
+    notesDirty = true;
+    notesSaveCount += 1;
+
+    const threshold = cfg.get<number>('notesGit.saveCountThreshold') ?? 10;
+    logChannel.appendLine(
+      `Foam Central: notes save detected (${notesSaveCount}/${threshold}) for ${doc.uri.fsPath}`
+    );
+
+    if (notesSaveCount >= threshold) {
+      void runNotesSync('save-threshold');
+    }
+  });
+
+  context.subscriptions.push(saveDisposable);
+
+  // Timer-based sync (every minute)
+  notesSyncTimer = setInterval(() => {
+    void maybeTimerSyncNotes();
+  }, 60 * 1000);
+
+  context.subscriptions.push({
+    dispose: () => {
+      if (notesSyncTimer) {
+        clearInterval(notesSyncTimer);
+        notesSyncTimer = undefined;
+      }
+    }
+  });
+
+  // On startup, just warn if remote is ahead (no auto-merge, no auto-commit)
+  void checkNotesRemoteAheadOnStartup();
+}
+
+async function maybeTimerSyncNotes(): Promise<void> {
+  if (!notesGitRoot) return;
+  if (!notesDirty) return;
+
+  const cfg = vscode.workspace.getConfiguration('foamCentral');
+  const minutesThreshold = cfg.get<number>('notesGit.minutesThreshold') ?? 10;
+  const elapsedMinutes = (Date.now() - notesLastSyncTime) / 60000;
+
+  if (elapsedMinutes < minutesThreshold) {
+    return;
+  }
+
+  logChannel.appendLine(
+    `Foam Central: timer-based notes sync triggered after ${elapsedMinutes.toFixed(1)} minutes`
+  );
+
+  await runNotesSync('timer');
+}
+
+async function getNotesAheadBehind(): Promise<{ ahead: number; behind: number; hasUpstream: boolean }> {
+  if (!notesGitRoot) {
+    return { ahead: 0, behind: 0, hasUpstream: false };
+  }
+
+  try {
+    const { stdout } = await runGit(
+      ['rev-list', '--left-right', '--count', 'HEAD...@{u}'],
+      notesGitRoot
+    );
+    const trimmed = stdout.trim();
+    if (!trimmed) {
+      return { ahead: 0, behind: 0, hasUpstream: false };
+    }
+    const [left, right] = trimmed.split(/\s+/);
+    const ahead = parseInt(left || '0', 10) || 0;
+    const behind = parseInt(right || '0', 10) || 0;
+    return { ahead, behind, hasUpstream: true };
+  } catch (err: any) {
+    // Probably no upstream configured
+    logChannel.appendLine(
+      `Foam Central: getNotesAheadBehind failed (likely no upstream): ${err.message || err}`
+    );
+    return { ahead: 0, behind: 0, hasUpstream: false };
+  }
+}
+
+async function checkNotesRemoteAheadOnStartup(): Promise<void> {
+  if (!notesGitRoot) return;
+  const { behind, hasUpstream } = await getNotesAheadBehind();
+  if (hasUpstream && behind > 0) {
+    vscode.window.showWarningMessage(
+      `Foam Central: your notes repo at "${notesGitRoot}" is behind its upstream by ${behind} commit(s). ` +
+      `Consider pulling before relying on auto-sync.`
+    );
+  }
+}
+
+async function runNotesSync(reason: 'save-threshold' | 'timer' | 'manual'): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration('foamCentral');
+  const autoEnabled = cfg.get<boolean>('notesGit.autoSyncEnabled') ?? false;
+  if (!autoEnabled) {
+    logChannel.appendLine('Foam Central: notes Git auto-sync disabled, skipping.');
+    return;
+  }
+
+  if (!notesGitRoot) {
+    logChannel.appendLine('Foam Central: notes Git root not set, skipping sync.');
+    return;
+  }
+
+  if (notesSyncInProgress) {
+    logChannel.appendLine('Foam Central: notes sync already in progress, skipping.');
+    return;
+  }
+
+  notesSyncInProgress = true;
+  try {
+    // Any changes at all?
+    const status = await runGit(['status', '--porcelain'], notesGitRoot);
+    const hasChanges = status.stdout.trim().length > 0;
+    if (!hasChanges) {
+      logChannel.appendLine('Foam Central: no changes to commit in notes repo.');
+      notesDirty = false;
+      notesSaveCount = 0;
+      notesLastSyncTime = Date.now();
+      return;
+    }
+
+    // Check ahead/behind vs upstream
+    const { ahead, behind, hasUpstream } = await getNotesAheadBehind();
+
+    if (hasUpstream && behind > 0) {
+      const choice = await vscode.window.showWarningMessage(
+        `Foam Central: notes repo at "${notesGitRoot}" is behind its upstream by ` +
+          `${behind} commit(s). Auto-push is paused. Do you want to pull and merge now?`,
+        'Pull Now',
+        'Skip'
+      );
+
+      if (choice === 'Pull Now') {
+        try {
+          // Safe-ish: fast-forward only, no auto-merge commit
+          await runGit(['pull', '--ff-only'], notesGitRoot);
+          vscode.window.showInformationMessage('Foam Central: git pull completed for notes repo.');
+        } catch (err: any) {
+          vscode.window.showErrorMessage(
+            'Foam Central: git pull failed for notes repo. Please resolve conflicts manually.\n' +
+            (err.stderr || err.message || String(err))
+          );
+          // Don't auto-push if pull failed
+          return;
+        }
+      } else {
+        // User chose Skip → don't push
+        logChannel.appendLine('Foam Central: user skipped pull, not pushing notes repo.');
+        return;
+      }
+    }
+
+    // Stage everything
+    await runGit(['add', '.'], notesGitRoot);
+
+    // Commit
+    const template = cfg.get<string>('notesGit.commitMessage') || 'Foam Central auto-commit ({reason})';
+    const message = template.replace('{reason}', reason);
+
+    try {
+      await runGit(['commit', '-m', message], notesGitRoot);
+      logChannel.appendLine(`Foam Central: committed notes changes with message "${message}".`);
+    } catch (err: any) {
+      // Ignore "nothing to commit" race
+      const msg = err.stderr || err.message || String(err);
+      if (/nothing to commit/i.test(msg)) {
+        logChannel.appendLine('Foam Central: nothing to commit (race), skipping push.');
+        notesDirty = false;
+        notesSaveCount = 0;
+        notesLastSyncTime = Date.now();
+        return;
+      }
+      throw err;
+    }
+
+    // Push (if we have a remote)
+    try {
+      await runGit(['push'], notesGitRoot);
+      logChannel.appendLine(
+        `Foam Central: pushed notes repo (ahead was ${ahead}, now synchronized).`
+      );
+    } catch (err: any) {
+      vscode.window.showWarningMessage(
+        'Foam Central: git push failed for notes repo. Check remote configuration.\n' +
+          (err.stderr || err.message || String(err))
+      );
+    }
+
+    notesDirty = false;
+    notesSaveCount = 0;
+    notesLastSyncTime = Date.now();
+  } catch (err: any) {
+    logChannel.appendLine('Foam Central: error during notes sync: ' + (err.message || String(err)));
+  } finally {
+    notesSyncInProgress = false;
+  }
+}
+
 /* ---------- VS Code activate/deactivate ---------- */
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
   logChannel = vscode.window.createOutputChannel('Foam Central');
   logChannel.appendLine('Foam Central: activate()');
 
@@ -560,6 +840,23 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(disposable);
 
+  const notesFolder = getNotesFolder();
+  if (notesFolder) {
+    await ensureDailyNoteFile(notesFolder, new Date()); // whatever you already have
+    await initNotesGitSync(notesFolder, context);
+  }
+
+  await initProjectTelemetry();
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('foamCentral.syncNotesNow', async () => {
+      if (!notesGitRoot) {
+        vscode.window.showInformationMessage('Foam Central: notes Git repo not detected.');
+        return;
+      }
+      await runNotesSync('manual');
+    })
+  );
   (async () => {
     try {
       logChannel.appendLine('initProjectTelemetry() starting');

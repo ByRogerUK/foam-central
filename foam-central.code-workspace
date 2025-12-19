@@ -1,0 +1,17 @@
+{
+  "folders": [
+    {
+      "name": "notes",
+      "path": "C:\\Users\\roger\\OneDrive\\foam-notes"
+    },
+    {
+      "name": "project",
+      "path": "c:\\Users\\roger\\OneDrive\\foam\\foam-central"
+    }
+  ],
+  "settings": {
+    "foam.files.ignore": [
+      "project/**"
+    ]
+  }
+}

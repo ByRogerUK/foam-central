@@ -24,6 +24,10 @@
         "command": "foam-central.createWorkspaceForCurrentFolder",
         "title": "Foam Central: Create Workspace for Current Folder",
         "category": "Foam Central"
+      },
+      {
+        "command": "foamCentral.syncNotesNow",
+        "title": "Foam Central: Sync Notes Now"
       }
     ],
     "configuration": {
@@ -39,6 +43,28 @@
           "type": "string",
           "default": "projects",
           "description": "Relative folder inside the notes workspace where project folders are stored."
+        },
+        "foamCentral.notesGit.autoSyncEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable automatic Git commit and push for the notes folder if it is a Git repository."
+        },
+        "foamCentral.notesGit.saveCountThreshold": {
+          "type": "number",
+          "default": 10,
+          "minimum": 1,
+          "description": "Number of note saves after which Foam Central will automatically sync notes Git (if there are changes)."
+        },
+        "foamCentral.notesGit.minutesThreshold": {
+          "type": "number",
+          "default": 10,
+          "minimum": 1,
+          "description": "Minimum number of minutes between auto-syncs when there are uncommitted changes in the notes repo."
+        },
+        "foamCentral.notesGit.commitMessage": {
+          "type": "string",
+          "default": "Foam Central auto-commit ({reason})",
+          "description": "Commit message template for automatic notes commits. `{reason}` will be replaced with save-threshold, timer or manual."
         }
       }
     }
