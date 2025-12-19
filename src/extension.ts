@@ -31,6 +31,12 @@ interface GitHubRequestOptions {
   body?: any;
 }
 
+interface WeekInfo {
+  year: number;
+  week: number;
+  weekStart: Date;
+}
+
 type GitAPI = {
   repositories: any[];
 };
@@ -111,6 +117,30 @@ function formatTime(date: Date): string {
   const h = date.getHours().toString().padStart(2, '0');
   const m = date.getMinutes().toString().padStart(2, '0');
   return `${h}:${m}`;
+}
+
+function toIsoDate(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+// ISO week: Monday-based
+function getIsoWeekInfo(date: Date): WeekInfo {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7; // Mon=1..Sun=7
+
+  // Move to Thursday of this week (ISO trick)
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+
+  const year = d.getUTCFullYear();
+  const yearStart = new Date(Date.UTC(year, 0, 1));
+  const week = Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+
+  // Now compute the Monday (week start)
+  const weekStart = new Date(d);
+  const wsDayNum = weekStart.getUTCDay() || 7;
+  weekStart.setUTCDate(weekStart.getUTCDate() - (wsDayNum - 1));
+
+  return { year, week, weekStart };
 }
 
 function runGit(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
@@ -198,6 +228,70 @@ function githubRequest<T = any>(
   });
 }
 
+async function ensureWeeklyTodo(
+  journalsDir: string,
+  weekDir: string,
+  info: WeekInfo
+): Promise<void> {
+  const todoPath = path.join(weekDir, 'todo.md');
+  const weekStartStr = toIsoDate(info.weekStart);
+
+  // If a todo already exists, keep it but ensure the correct week start is mentioned.
+  try {
+    const existing = await fsp.readFile(todoPath, 'utf8');
+    if (!existing.includes(weekStartStr)) {
+      const extra = `\n> Week start: ${weekStartStr}\n`;
+      await fsp.appendFile(todoPath, extra, 'utf8');
+    }
+    return;
+  } catch {
+    // todo.md doesn't exist yet: create a new one.
+  }
+
+  // Collect carry-over tasks from previous week (unfinished: "- [ ] ..." lines)
+  const prevStart = new Date(info.weekStart);
+  prevStart.setUTCDate(prevStart.getUTCDate() - 1); // any day in previous week
+  const prevInfo = getIsoWeekInfo(prevStart);
+  const prevYearDir = path.join(journalsDir, String(prevInfo.year));
+  const prevWeekDirName = `week-${prevInfo.week.toString().padStart(2, '0')}`;
+  const prevWeekDir = path.join(prevYearDir, prevWeekDirName);
+  const prevTodoPath = path.join(prevWeekDir, 'todo.md');
+
+  const carried: string[] = [];
+  try {
+    const prevContent = await fsp.readFile(prevTodoPath, 'utf8');
+    const lines = prevContent.split(/\r?\n/);
+    for (const line of lines) {
+      if (/^\s*-\s*\[\s*]\s+/.test(line)) {
+        carried.push(line);
+      }
+    }
+  } catch {
+    // no previous todo or unreadable: no carry-over
+  }
+
+  const lines: string[] = [];
+  lines.push('---');
+  lines.push(`year: ${info.year}`);
+  lines.push(`week: ${info.week}`);
+  lines.push(`start: ${weekStartStr}`);
+  lines.push('---', '');
+  lines.push(
+    `# Week ${info.week.toString().padStart(2, '0')} (${weekStartStr})`,
+    '',
+    '## TODO',
+    ''
+  );
+
+  if (carried.length > 0) {
+    lines.push('### Carried over from previous week', '');
+    lines.push(...carried, '');
+    lines.push('');
+  }
+
+  await fsp.writeFile(todoPath, lines.join('\n'), { encoding: 'utf8' });
+}
+
 /* ---------- Command: create workspace for current folder ---------- */
 
 async function createWorkspaceForCurrentFolder(): Promise<void> {
@@ -266,27 +360,49 @@ function getDailyNoteSlug(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-async function ensureDailyNoteFile(notesFolder: string, date: Date): Promise<{ slug: string; uri: vscode.Uri }> {
+async function ensureDailyNoteFile(
+  notesFolder: string,
+  date: Date
+): Promise<{ slug: string; uri: vscode.Uri }> {
   const slug = getDailyNoteSlug(date);
   const journalsDir = path.join(notesFolder, 'journals');
+  const cfg = vscode.workspace.getConfiguration('foamCentral');
+  const groupByWeek = cfg.get<boolean>('journal.groupByWeek') ?? true;
 
-  await fsp.mkdir(journalsDir, { recursive: true });
+  let filePath: string;
+  let weekInfo: WeekInfo | undefined;
+  let weekDir: string | undefined;
 
-  const filePath = path.join(journalsDir, `${slug}.md`);
+  if (groupByWeek) {
+    weekInfo = getIsoWeekInfo(date);
+    const yearDir = path.join(journalsDir, String(weekInfo.year));
+    const weekDirName = `week-${weekInfo.week.toString().padStart(2, '0')}`;
+    weekDir = path.join(yearDir, weekDirName);
+
+    await fsp.mkdir(weekDir, { recursive: true });
+    await ensureWeeklyTodo(journalsDir, weekDir, weekInfo);
+
+    filePath = path.join(weekDir, `${slug}.md`);
+  } else {
+    await fsp.mkdir(journalsDir, { recursive: true });
+    filePath = path.join(journalsDir, `${slug}.md`);
+  }
+
   try {
     await fsp.access(filePath);
   } catch {
-    const content = [
-      '---',
-      'type: daily-note',
-      '---',
-      '',
-      `# ${slug}`,
-      '',
-      '## Log',
-      ''
-    ].join('\n');
-    await fsp.writeFile(filePath, content, { encoding: 'utf8' });
+    const lines: string[] = [];
+    lines.push('---');
+    lines.push('type: daily-note');
+    lines.push(`date: ${slug}`);
+    if (groupByWeek && weekInfo) {
+      lines.push(`year: ${weekInfo.year}`);
+      lines.push(`week: ${weekInfo.week}`);
+      lines.push(`weekStart: ${toIsoDate(weekInfo.weekStart)}`);
+    }
+    lines.push('---', '');
+    lines.push(`# ${slug}`, '', '## Log', '');
+    await fsp.writeFile(filePath, lines.join('\n'), { encoding: 'utf8' });
   }
 
   return { slug, uri: vscode.Uri.file(filePath) };
@@ -529,11 +645,12 @@ async function logVcsEvent(
       `## ${dateStr} ${timeStr} [${kind}] (${evt.branch})`,
       '',
       `- Commit: \`${evt.shortHash}\``,
-      `- Message: ${evt.message}`,
+      `- Message: \`${evt.message}\``,
       `- Ahead: ${evt.ahead} Behind: ${evt.behind}`,
       upStr ? `- Upstream: ${evt.upstreamName}` : '',
       tagStr ? `- Tags: ${evt.tags.join(', ')}` : '',
       `- Journal: [[${dailySlug}]]`,
+      '',
       ''
     ].filter(Boolean);
 

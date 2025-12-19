@@ -49,6 +49,11 @@
           "default": "projects",
           "description": "Relative folder inside the notes workspace where project folders are stored."
         },
+        "foamCentral.journal.groupByWeek": {
+          "type": "boolean",
+          "default": true,
+          "description": "Group daily notes under journals/<year>/week-XX/ with a weekly todo.md, instead of directly under journals/."
+        },
         "foamCentral.notesGit.autoSyncEnabled": {
           "type": "boolean",
           "default": false,

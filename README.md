@@ -118,7 +118,38 @@ foam-notes/
       home.md
       vcs.md
 ```
+## new layout
+### Weekly journals and TODOs
 
+By default, Foam Central groups daily notes into **year → week** folders under `journals/`:
+
+```text
+journals/
+  2025/
+    week-51/
+      2025-12-15.md
+      2025-12-16.md
+      ...
+      todo.md
+```
+
+This is controlled by: ```foamCentral.journal.groupByWeek (boolean, default: true)```
+
+When enabled:
+
+  Daily notes go into journals/<year>/week-XX/YYYY-MM-DD.md.
+
+  Each week folder gets a todo.md file with:
+
+      year, week, and start (date of the Monday for that ISO week).
+
+  If a todo.md already exists for that week, Foam Central leaves it in place and appends the correct week start date if it’s missing.
+
+  When a new week’s todo.md is created, any unfinished tasks from the previous week
+  (- [ ] ...) are carried over under a “Carried over from previous week” section.
+
+If you prefer the original flat structure (journals/2025-12-19.md), you can turn
+this off by setting: ```"foamCentral.journal.groupByWeek": false```
 
 ---
 ## Commands

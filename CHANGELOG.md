@@ -5,7 +5,11 @@ All notable changes to **Foam Central Workspace Helper** will be documented in t
 ## [0.2.0] - 2025-12-19
 
 ### Added
-Git Integration
+- Git Integration
+- todo support.
+
+### Changed
+- layout of the Journals folder to stop it from having an oversized folder, so now in year and week
 
 ## [0.1.2] – 2025-12-18
 
