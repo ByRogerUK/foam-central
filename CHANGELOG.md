@@ -2,6 +2,11 @@
 
 All notable changes to **Foam Central Workspace Helper** will be documented in this file.
 
+## [0.2.0] - 2025-12-19
+
+### Added
+Git Integration
+
 ## [0.1.2] – 2025-12-18
 
 ### Added

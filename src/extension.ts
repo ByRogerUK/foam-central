@@ -1,9 +1,10 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import * as fs from 'fs'; 
+import * as fs from 'fs';
 import * as fsp from 'fs/promises';
 import * as cp from 'child_process';
 import * as os from 'os';
+import * as https from 'https';
 
 interface ProjectInfo {
   name: string;       // project directory name (e.g. "story_engine2")
@@ -21,6 +22,13 @@ interface VcsEvent {
   behind: number;
   tags: string[];
   upstreamName: string;
+}
+
+interface GitHubRequestOptions {
+  method: 'GET' | 'POST' | 'HEAD';
+  path: string;
+  token: string;
+  body?: any;
 }
 
 type GitAPI = {
@@ -123,7 +131,6 @@ function runGit(args: string[], cwd: string): Promise<{ stdout: string; stderr: 
 function findGitRoot(startPath: string): string | undefined {
   let current = path.resolve(startPath);
 
-  // Walk up until we find .git or hit filesystem root
   while (true) {
     const gitPath = path.join(current, '.git');
     try {
@@ -142,6 +149,53 @@ function findGitRoot(startPath: string): string | undefined {
   }
 
   return undefined;
+}
+
+function githubRequest<T = any>(
+  options: GitHubRequestOptions
+): Promise<{ status: number; data: T | undefined }> {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: 'api.github.com',
+        port: 443,
+        path: options.path,
+        method: options.method,
+        headers: {
+          'User-Agent': 'foam-central-extension',
+          'Accept': 'application/vnd.github+json',
+          'Authorization': `Bearer ${options.token}`,
+          ...(options.body ? { 'Content-Type': 'application/json' } : {})
+        }
+      },
+      res => {
+        const status = res.statusCode || 0;
+        const chunks: Buffer[] = [];
+
+        res.on('data', chunk => chunks.push(chunk));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          let json: any = undefined;
+          const contentType = res.headers['content-type'] || '';
+          if (text && typeof contentType === 'string' && contentType.includes('application/json')) {
+            try {
+              json = JSON.parse(text);
+            } catch {
+              // ignore parse errors, return undefined data
+            }
+          }
+          resolve({ status, data: json as T });
+        });
+      }
+    );
+
+    req.on('error', reject);
+
+    if (options.body) {
+      req.write(JSON.stringify(options.body));
+    }
+    req.end();
+  });
 }
 
 /* ---------- Command: create workspace for current folder ---------- */
@@ -422,7 +476,7 @@ async function handleRepoStateChange(repo: any, info: ProjectInfo) {
     kind = 'COMMIT';
   } else if (ahead === 0 && behind === 0) {
     kind = 'PULL';
-}
+  }
 
   let tags: string[] = [];
   if (Array.isArray(latest.refs)) {
@@ -753,7 +807,7 @@ async function runNotesSync(reason: 'save-threshold' | 'timer' | 'manual'): Prom
     if (hasUpstream && behind > 0) {
       const choice = await vscode.window.showWarningMessage(
         `Foam Central: notes repo at "${notesGitRoot}" is behind its upstream by ` +
-          `${behind} commit(s). Auto-push is paused. Do you want to pull and merge now?`,
+        `${behind} commit(s). Auto-push is paused. Do you want to pull and merge now?`,
         'Pull Now',
         'Skip'
       );
@@ -810,7 +864,7 @@ async function runNotesSync(reason: 'save-threshold' | 'timer' | 'manual'): Prom
     } catch (err: any) {
       vscode.window.showWarningMessage(
         'Foam Central: git push failed for notes repo. Check remote configuration.\n' +
-          (err.stderr || err.message || String(err))
+        (err.stderr || err.message || String(err))
       );
     }
 
@@ -821,6 +875,257 @@ async function runNotesSync(reason: 'save-threshold' | 'timer' | 'manual'): Prom
     logChannel.appendLine('Foam Central: error during notes sync: ' + (err.message || String(err)));
   } finally {
     notesSyncInProgress = false;
+  }
+}
+
+async function initNotesRepoCommand(context: vscode.ExtensionContext): Promise<void> {
+  const notesFolder = getNotesFolder();
+  if (!notesFolder) {
+    vscode.window.showErrorMessage(
+      'Foam Central: notesFolder is not configured. Set "foamCentral.notesFolder" in Settings first.'
+    );
+    return;
+  }
+
+  let gitRoot = findGitRoot(notesFolder);
+
+  if (gitRoot) {
+    // Already in a repo – just offer to configure GitHub remote
+    const choice = await vscode.window.showInformationMessage(
+      `Foam Central: notes folder is already inside a Git repository at "${gitRoot}".`,
+      'Configure GitHub Remote',
+      'Cancel'
+    );
+    if (choice === 'Configure GitHub Remote') {
+      await ensureNotesRemoteOnGitHub(gitRoot);
+      // Re-init auto-sync now that we have a repo
+      await initNotesGitSync(notesFolder, context);
+    }
+    return;
+  }
+
+  // Not in a repo: init one
+  const initChoice = await vscode.window.showInformationMessage(
+    'Foam Central: notes folder is not under Git. Initialize a new Git repository here?',
+    'Initialize Repo',
+    'Cancel'
+  );
+  if (initChoice !== 'Initialize Repo') {
+    return;
+  }
+
+  try {
+    await runGit(['init'], notesFolder);
+    vscode.window.showInformationMessage(
+      `Foam Central: initialized Git repository in "${notesFolder}".`
+    );
+  } catch (err: any) {
+    vscode.window.showErrorMessage(
+      'Foam Central: failed to initialize Git repo: ' + (err.stderr || err.message || String(err))
+    );
+    return;
+  }
+
+  // Optional initial commit if there are files
+  try {
+    const status = await runGit(['status', '--porcelain'], notesFolder);
+    if (status.stdout.trim().length > 0) {
+      await runGit(['add', '.'], notesFolder);
+      await runGit(['commit', '-m', 'Initial commit (Foam notes)'], notesFolder);
+      vscode.window.showInformationMessage('Foam Central: created initial notes commit.');
+    }
+  } catch (err: any) {
+    logChannel.appendLine(
+      'Foam Central: initial commit failed (non-fatal): ' + (err.stderr || err.message || String(err))
+    );
+  }
+
+  // Offer to connect to GitHub
+  const remoteChoice = await vscode.window.showInformationMessage(
+    'Foam Central: Do you want to connect this notes repo to a remote?',
+    'GitHub Private Repo',
+    'Skip'
+  );
+  if (remoteChoice === 'GitHub Private Repo') {
+    await ensureNotesRemoteOnGitHub(notesFolder);
+  }
+
+  // Recompute git root and start auto-sync
+  gitRoot = findGitRoot(notesFolder) || notesFolder;
+  notesGitRoot = gitRoot;
+  await initNotesGitSync(notesFolder, context);
+}
+
+async function ensureNotesRemoteOnGitHub(notesRepoPath: string): Promise<void> {
+  // Ask VS Code for a GitHub session
+  let session: vscode.AuthenticationSession;
+  try {
+    session = await vscode.authentication.getSession(
+      'github',
+      ['repo'],
+      { createIfNone: true }
+    );
+  } catch (err: any) {
+    vscode.window.showErrorMessage(
+      'Foam Central: unable to get GitHub session. Make sure you are signed in to GitHub in VS Code.'
+    );
+    return;
+  }
+
+  const token = session.accessToken;
+
+  // Get user info (login name)
+  const userResp = await githubRequest<{ login: string }>({
+    method: 'GET',
+    path: '/user',
+    token
+  });
+  if (userResp.status !== 200 || !userResp.data?.login) {
+    vscode.window.showErrorMessage(
+      'Foam Central: failed to get GitHub user info. Status ' + userResp.status
+    );
+    return;
+  }
+  const login = userResp.data.login;
+
+  // Ask for base repo name
+  const defaultName = 'foam-notes';
+  const baseName = await vscode.window.showInputBox({
+    title: 'Foam Central: Notes GitHub repository name',
+    value: defaultName,
+    prompt: 'Base name for the GitHub repo where your notes will be stored.'
+  }) || defaultName;
+
+  // Check if base repo exists, and find first free suffix
+  let existingName: string | undefined;
+  let freeName: string | undefined;
+
+  for (let i = 0; i < 20; i++) {
+    const candidate = i === 0 ? baseName : `${baseName}-${i}`;
+    const head = await githubRequest({
+      method: 'GET',
+      path: `/repos/${encodeURIComponent(login)}/${encodeURIComponent(candidate)}`,
+      token
+    });
+
+    if (head.status === 200 && !existingName) {
+      existingName = candidate;
+    } else if (head.status === 404 && !freeName) {
+      freeName = candidate;
+      break;
+    }
+  }
+
+  if (!freeName && !existingName) {
+    vscode.window.showErrorMessage(
+      'Foam Central: could not determine available repository name on GitHub.'
+    );
+    return;
+  }
+
+  // Decide: use existing or create new
+  let useExisting = false;
+  let finalName: string;
+
+  if (existingName) {
+    const createName = freeName || `${baseName}-new`;
+    const pick = await vscode.window.showQuickPick(
+      [
+        { label: `Use existing repo "${existingName}"`, value: 'use' },
+        { label: `Create new repo "${createName}"`, value: 'create' }
+      ],
+      { title: 'Foam Central: choose GitHub repository' }
+    );
+    if (!pick) {
+      return;
+    }
+    if (pick.value === 'use') {
+      useExisting = true;
+      finalName = existingName;
+    } else {
+      finalName = createName;
+    }
+  } else {
+    // No existing base name – just create the free one
+    finalName = freeName || baseName;
+  }
+
+  // If we are creating a new repo on GitHub:
+  if (!useExisting) {
+    const createResp = await githubRequest<any>({
+      method: 'POST',
+      path: '/user/repos',
+      token,
+      body: {
+        name: finalName,
+        private: true, // renamed field "private" is reserved word in TS strict, so use bracket
+        description: 'Foam Central notes repository'
+      } as any
+    });
+
+    if (createResp.status !== 201) {
+      vscode.window.showErrorMessage(
+        'Foam Central: failed to create GitHub repo. Status ' +
+          createResp.status +
+          '. ' +
+          (createResp.data && (createResp.data.message || ''))
+      );
+      return;
+    }
+
+    vscode.window.showInformationMessage(
+      `Foam Central: created private GitHub repo "${login}/${finalName}".`
+    );
+  } else {
+    vscode.window.showInformationMessage(
+      `Foam Central: will use existing GitHub repo "${login}/${finalName}".`
+    );
+  }
+
+  // Configure Git remote "origin" with HTTPS URL
+  const remoteUrl = `https://github.com/${login}/${finalName}.git`;
+
+  try {
+    // If remote origin exists already, set-url; otherwise add
+    let haveOrigin = false;
+    try {
+      const remotes = await runGit(['remote'], notesRepoPath);
+      haveOrigin = remotes.stdout.split(/\r?\n/).some(r => r.trim() === 'origin');
+    } catch {
+      // ignore
+    }
+
+    if (haveOrigin) {
+      await runGit(['remote', 'set-url', 'origin', remoteUrl], notesRepoPath);
+    } else {
+      await runGit(['remote', 'add', 'origin', remoteUrl], notesRepoPath);
+    }
+
+    // Ensure branch is "main"
+    try {
+      await runGit(['branch', '-M', 'main'], notesRepoPath);
+    } catch {
+      // ignore (already main, or no commits yet)
+    }
+
+    // Try initial push (user may need to authenticate via git credential helper)
+    try {
+      await runGit(['push', '-u', 'origin', 'main'], notesRepoPath);
+      vscode.window.showInformationMessage(
+        `Foam Central: pushed notes repo to GitHub (${login}/${finalName}).`
+      );
+    } catch (err: any) {
+      vscode.window.showWarningMessage(
+        'Foam Central: repository was linked to GitHub, but initial push failed. ' +
+          'You may need to resolve this manually via Git.\n' +
+          (err.stderr || err.message || String(err))
+      );
+    }
+  } catch (err: any) {
+    vscode.window.showErrorMessage(
+      'Foam Central: failed to configure GitHub remote: ' +
+        (err.stderr || err.message || String(err))
+    );
   }
 }
 
@@ -857,6 +1162,13 @@ export async function activate(context: vscode.ExtensionContext) {
       await runNotesSync('manual');
     })
   );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('foamCentral.initNotesRepo', () =>
+      initNotesRepoCommand(context)
+    )
+  );
+
   (async () => {
     try {
       logChannel.appendLine('initProjectTelemetry() starting');

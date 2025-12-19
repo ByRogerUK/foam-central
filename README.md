@@ -118,6 +118,8 @@ foam-notes/
       home.md
       vcs.md
 ```
+
+
 ---
 ## Commands
 ```Foam Central: Create Workspace for Current Folder```
@@ -209,6 +211,112 @@ When the project folder is a Git repository:
 - Tags: v0.1.0
 - Journal: [[2025-12-18]]
 ```
+
+
+---
+
+### Notes Git Integration
+
+Foam Central can keep your **notes folder** automatically synced to a Git repository and (optionally) a private GitHub repo.
+
+#### Command: Initialize Notes Git Repo
+
+Use the command:
+
+> **Foam Central: Initialize Notes Git Repo**
+
+This command:
+
+1. Looks at your configured `foamCentral.notesFolder`.
+2. If the folder is **not** in a Git repo:
+
+   * Offers to run `git init` in the notes folder.
+   * Optionally makes an initial commit if there are existing files.
+   * Offers to create or link a **private GitHub repository** in the GitHub account you’re signed into in VS Code (e.g. `foam-notes`, `foam-notes-1`, `foam-notes-2`, …).
+   * Sets the `origin` remote and tries an initial `git push -u origin main`.
+3. If the folder **is already** in a Git repo:
+
+   * Offers to configure a **GitHub remote** for the existing repo (or reuse an existing one).
+4. Once the repo + remote are set up, it enables the automatic notes sync (see below).
+
+You can run this any time from the Command Palette.
+
+---
+
+### Command: Sync Notes Now
+
+You can also manually force a sync at any time with:
+
+> **Foam Central: Sync Notes Now**
+
+This will:
+
+1. Check for changes in the notes repo.
+2. If the remote has new commits (you’re behind), prompt you to pull before pushing.
+3. Stage and commit changes using the configured commit message template.
+4. Push the notes repo to its configured remote.
+
+---
+
+### Notes Git Auto-Sync Settings
+
+These settings live under **Settings → Extensions → Foam Central**:
+
+* `foamCentral.notesGit.autoSyncEnabled` (boolean, default: `false`)
+  Enable/disable automatic Git commit + push for the notes folder (if it’s inside a Git repo).
+
+* `foamCentral.notesGit.saveCountThreshold` (number, default: `10`)
+  After this many **note saves** (in the notes folder), Foam Central will trigger an auto-sync (commit + push), if there are changes.
+
+* `foamCentral.notesGit.minutesThreshold` (number, default: `10`)
+  Minimum number of **minutes between auto-syncs**. If there are uncommitted changes and this much time has passed since the last sync, an auto-sync will run even if you haven’t hit the save-count threshold.
+
+* `foamCentral.notesGit.commitMessage` (string, default:
+  `"Foam Central auto-commit ({reason})"`)
+  Template for auto-commit messages. The `{reason}` placeholder is replaced with:
+
+  * `save-threshold` (triggered by number of saves)
+  * `timer` (triggered by time threshold)
+  * `manual` (when you run **Sync Notes Now**)
+
+When auto-sync runs and the notes repo is **behind** its upstream (remote has new commits not in your local copy), Foam Central:
+
+1. Warns you that the remote is ahead.
+2. Offers to run a **fast-forward pull** (`git pull --ff-only`).
+3. Only commits + pushes if you either:
+
+   * Pull successfully, or
+   * Choose to skip and there’s no remote divergence.
+
+This avoids silently clobbering remote changes.
+
+---
+
+### Troubleshooting: Foam onWillSaveTextDocument Error
+
+If you see an error like this in your logs:
+
+```text
+onWillSaveTextDocument-listener from extension 'foam.foam-vscode' threw ERROR
+TypeError: Cannot read properties of undefined (reading 'document')
+    at ...
+```
+
+This error is coming from the **Foam extension itself** (`foam.foam-vscode`), not from Foam Central.
+
+In practice:
+
+* Foam Central will continue to work normally (daily notes, project pages, Git sync).
+* The error is usually triggered by Foam’s own `onWillSaveTextDocument` handler when certain documents are saved.
+
+If it becomes noisy or disruptive, you can try:
+
+* Updating Foam to the latest version.
+* Temporarily disabling specific Foam features that run on save.
+* As a last resort, disabling the Foam extension for that workspace and relying on Foam Central’s features alone.
+
+Foam Central does **not** rely on Foam’s `onWillSaveTextDocument` hook, so the error does not affect its core behaviour.
+
 ---
 ### Roadmap / Ideas
 

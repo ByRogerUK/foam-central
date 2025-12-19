@@ -2,7 +2,7 @@
   "name": "foam-central",
   "displayName": "Foam Central Workspace Helper",
   "description": "Central Foam notes + per-project journals and VCS log.",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "publisher": "byroger",
   "repository": "https://github.com/ByRogerUK/foam-central",
   "license": "GPL-2.0-only",
@@ -28,6 +28,11 @@
       {
         "command": "foamCentral.syncNotesNow",
         "title": "Foam Central: Sync Notes Now"
+      },
+      {
+        "command": "foamCentral.initNotesRepo",
+        "title": "Foam Central: Initialize Notes Git Repo",
+        "category": "Foam Central"
       }
     ],
     "configuration": {
