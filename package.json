@@ -2,7 +2,7 @@
   "name": "foam-central",
   "displayName": "Foam Central Workspace Helper",
   "description": "Central Foam notes + per-project journals and VCS log.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "byroger",
   "repository": "https://github.com/ByRogerUK/foam-central",
   "license": "GPL-2.0-only",
@@ -32,6 +32,16 @@
       {
         "command": "foamCentral.initNotesRepo",
         "title": "Foam Central: Initialize Notes Git Repo",
+        "category": "Foam Central"
+      },
+      {
+        "command": "foamCentral.setProjectAlias",
+        "title": "Foam Central: Set Project Alias",
+        "category": "Foam Central"
+      },
+      {
+        "command": "foamCentral.buildFolderIndexes",
+        "title": "Foam Central: Build Folder Indexes",
         "category": "Foam Central"
       }
     ],
@@ -75,6 +85,17 @@
           "type": "string",
           "default": "Foam Central auto-commit ({reason})",
           "description": "Commit message template for automatic notes commits. `{reason}` will be replaced with save-threshold, timer or manual."
+        },
+        "foamCentral.projectNameOverride": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "description": "Optional name to use for this workspace in Foam Central notes (e.g. 'training_project_mainapp_core_0'). If empty, the folder name is used."
+        },
+        "foamCentral.autoUpdateFolderIndex": {
+          "type": "boolean",
+          "default": true,
+          "description": "When enabled, Foam Central automatically adds new notes in a folder to that folder's index.md (if present)."
         }
       }
     }

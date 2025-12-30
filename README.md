@@ -2,368 +2,207 @@
 
 Foam Central keeps a **single notes workspace** for all your projects and automatically:
 
-- Creates **daily notes** in one place.
-- Creates **per-project home + VCS pages** in your notes.
-- Logs **when you open a project**.
-- (If the project is a Git repo) logs **commits / pulls** into both your daily note and a project `vcs.md`.
+- Ensures today’s **daily note** exists in the central notes repo.
+- Creates (or reuses) a **project notebook** under `projects/<slug>/`.
+- Logs **open / close events** for that project into the daily note.
+- Maintains a `home.md` and `vcs.md` for each project, so you have a
+  “landing page” and a simple VCS log.
+- (Optional) Automatically keeps a simple `index.md` in each folder of the notes
+  up to date, with wiki-links to every note in that folder.
 
-It’s designed for people who work on lots of repos at once and want a **Foam-style knowledge base** that tracks what they touched and when.
+This lets you have lots of separate repos (and even multiple copies of the same repo name in different places), but **only one Foam graph** and one journal.
 
 ---
 
 ## Features
 
-- 🗂 **Central notes folder**
-  - All notes live under a single path (`foamCentral.notesFolder`), e.g. `C:\Users\<you>\OneDrive\foam-notes`.
-  - Optional subfolder for projects (`foamCentral.projectNotesFolder`, default: `projects`).
+- **Central notes folder**
 
-- 📆 **Automatic daily notes**
-  - Ensures there is a `journals/YYYY-MM-DD.md` for **today**.
-  - Keeps a simple `## Log` section where events are appended.
+  Configure a single folder (e.g. `C:\Users\<you>\OneDrive\foam-notes`) as your
+  Foam notes root. All daily notes and project notes live under here.
 
-- 📁 **Per-project pages**
-  - For each project folder you open, Foam Central creates:
-    - `projects/<slug>/home.md`
-    - `projects/<slug>/vcs.md`
-  - The _home_ page gets an `## Activity` section with links back to daily notes.
-  - The _vcs_ page keeps a structured history of Git events.
+- **Per-project notebooks**
 
-- 🧷 **Project open logging**
-  - When a project is detected, the extension:
-    - Appends a line to today’s daily note:
-      - `- 14:32 [OPEN] [[projects/my-project/home]] at \`C:\path\to\my-project\``
-    - Appends a line to the project home page:
-      - `- [[2025-12-18]] opened at 14:32`
+  For each workspace folder you open, Foam Central creates a project notebook:
 
-- 🧬 **Git integration (optional)**
-  - If the project folder is a Git repo, Foam Central:
-    - Detects HEAD changes (commits, pulls, etc.).
-    - Writes a summary to the daily note.
-    - Writes a detailed block to `projects/<slug>/vcs.md`, including:
-      - Branch
-      - Short hash
-      - Commit message
-      - Ahead/behind counts
-      - Upstream name (if any)
-      - Tags (if any)
-      - Link back to the daily note
+  ```text
+  <notesRoot>/
+    projects/
+      <slug>/
+        home.md
+        vcs.md
+        ...
+````
+
+The slug is normally derived from the folder name, but can be overridden (see below).
+
+* **Project home + VCS log**
+
+  * `home.md` contains front-matter + basic metadata:
+
+    * project name
+    * slug
+    * default path on disk
+    * **link to the VCS log page**
+  * `vcs.md` is a simple page where Foam Central can append entries about git activity
+    (if you have git logging enabled in your version).
+
+* **Daily notes**
+
+  When you open a project, Foam Central makes sure today’s daily note exists
+  and logs an entry like “Opened project X at HH:MM” with a wiki-link
+  back to the project’s home page.
+
+* **Project name override**
+
+  Sometimes you have multiple repos called `mainapp` in different places, but in
+  your notes you want to distinguish them, e.g.:
+
+  * `training_project_mainapp_core_0`
+  * `training_project_mainapp_core_1`
+
+  Foam Central supports a per-workspace **project name override** so the project
+  ’s notes folder and links use the override instead of the raw directory name.
+
+* **Folder index pages (optional)**
+
+  If enabled, Foam Central will:
+
+  * Maintain a simple `index.md` in any folder that already has one, adding
+    a bullet `- [[NoteName]]` whenever a new `.md` file is created in that folder.
+  * Provide a command to walk the entire notes tree and generate `index.md`
+    files for every folder that contains `.md` files but doesn’t yet have an index.
+
+  This makes it much easier to navigate large notes trees without relying solely
+  on the graph.
 
 ---
 
 ## Requirements
 
-- Visual Studio Code **1.90.0+**
-- Foam extension: `foam.foam-vscode`
-- (Optional, for Git logging) VS Code Git extension: `vscode.git`  
-  – this is built-in in standard VS Code.
-
----
-
-## Installation
-
-You can either:
-
-1. **Install directly from the Marketplace**
-
-   - Open VS Code.
-   - Go to **Extensions** (`Ctrl+Shift+X`).
-   - Search for **“Foam Central Workspace Helper”** or `byroger.foam-central`.
-   - Click **Install**.
-
-2. **Use the Foam Central Pack**
-
-   If you install the **Foam Central Pack**, it will pull in:
-
-   - Foam
-   - Foam Central
-   - Recommended Markdown / Git helpers
+* [VS Code](https://code.visualstudio.com/) (Insiders or Stable).
+* The [Foam](https://marketplace.visualstudio.com/items?itemName=foam.foam-vscode) extension installed and enabled.
+* A folder to act as your central notes repo (can be a git repo, e.g. on OneDrive).
+* (Optional but recommended) `git` installed and on your PATH.
 
 ---
 
 ## Configuration
 
-Open **Settings** → search for **“Foam Central”**.
+All settings live under the `"foamCentral"` namespace.
 
-### `foamCentral.notesFolder` (string)
+You can set them via **Settings UI** or in `settings.json`.
 
-Absolute path to your central notes workspace, for example:
+### `foamCentral.notesFolder` (string, required)
 
-```text
-C:\Users\<you>\OneDrive\foam-notes
+Absolute path to your central Foam notes folder.
+
+Example (`settings.json`):
+
+```json
+"foamCentral.notesFolder": "C:/Users/roger/OneDrive/foam-notes"
 ```
 
-If you leave it empty, Foam Central will try to pick a default:
-- Prefer ```OneDrive\foam-notes``` if OneDrive is configured.
-
-- Otherwise use ```HOME\foam-notes```.
-
-This value is then stored in your global settings.
-
-```foamCentral.projectNotesFolder``` (string)
-
-Relative folder inside ```notesFolder``` where per-project notes are stored.
-
-- Default: ```"projects"```
-
-- Example layout:
-```
-foam-notes/
-  journals/
-    2025-12-18.md
-  projects/
-    story_engine2/
-      home.md
-      vcs.md
-    foam-central/
-      home.md
-      vcs.md
-```
-## new layout
-### Weekly journals and TODOs
-
-By default, Foam Central groups daily notes into **year → week** folders under `journals/`:
-
-```text
-journals/
-  2025/
-    week-51/
-      2025-12-15.md
-      2025-12-16.md
-      ...
-      todo.md
-```
-
-This is controlled by: ```foamCentral.journal.groupByWeek (boolean, default: true)```
-
-When enabled:
-
-  Daily notes go into journals/<year>/week-XX/YYYY-MM-DD.md.
-
-  Each week folder gets a todo.md file with:
-
-      year, week, and start (date of the Monday for that ISO week).
-
-  If a todo.md already exists for that week, Foam Central leaves it in place and appends the correct week start date if it’s missing.
-
-  When a new week’s todo.md is created, any unfinished tasks from the previous week
-  (- [ ] ...) are carried over under a “Carried over from previous week” section.
-
-If you prefer the original flat structure (journals/2025-12-19.md), you can turn
-this off by setting: ```"foamCentral.journal.groupByWeek": false```
+Foam Central will create subfolders like `daily/`, `projects/`, etc. underneath here.
 
 ---
-## Commands
-```Foam Central: Create Workspace for Current Folder```
 
-Takes the currently-open folder and creates a ```.code-workspace``` file that includes:
+### `foamCentral.projectNameOverride` (string, per-workspace)
 
-1. Your notes folder (from ```foamCentral.notesFolder```)
+**Scope:** Workspace Folder
 
-2. The current project folder
+This lets you override the project name used in notes. The override affects:
 
-Example generated workspace:
-```
+* the slug used for the project’s notes directory under `projects/<slug>/`
+* the title and metadata in `home.md`
+* links written into daily notes and VCS logs
+
+Example (`.vscode/settings.json` in your project folder):
+
+```json
 {
-  "folders": [
-    { "name": "notes", "path": "C:/Users/<you>/OneDrive/foam-notes" },
-    { "name": "project", "path": "C:/dev/my-project" }
-  ],
-  "settings": {
-    "foam.files.ignore": [
-      "project/**",
-      "**/.history/**"
-    ]
-  }
+  "foamCentral.projectNameOverride": "training_project_mainapp_core_0"
 }
 ```
 
-VS Code then reopens on this workspace.
----
-How it works
-Project detection
-
-On activation, Foam Central:
-
-1. Resolves ```foamCentral.notesFolder```.
-
-2. Looks at the workspace folders:
-
-    - If both notes + project are present, it uses those.
-
-    - Otherwise, it uses the first workspace folder as the project and still logs into the central notes folder.
-
-For a detected project:
-
-- Slug = folder name with spaces replaced by ```_```
-
-- Project notes root:
-```notesFolder/<projectNotesFolder>/<slug>/```
-
-
-Files it creates
-
-For a project with slug ```my-project```:
-
-- ```journals/2025-12-18.md```
-
-- ```projects/my-project/home.md```
-
-- ```projects/my-project/vcs.md```
-
-Existing files are reused; they won’t be overwritten.
-
----
-### Git logging details
-
-When the project folder is a Git repository:
-
-- Foam Central subscribes to the repo’s state changes.
-
-- When ```HEAD``` changes, it:
-
-    - Reads the latest commit (message, hash, refs/tags).
-
-    - Determines if it’s more like a COMMIT or PULL (based on ahead/behind).
-
-    - Logs a line to today’s daily note, for example:
-```
-- 15:04 [COMMIT] [[projects/my-project/home]] on branch main "Fix bug"
-  (ahead 1, behind 0, upstream: origin/main, tags: v0.1.0)
-```
-    - Appends a section to projects/my-project/vcs.md:
-
-```
-## 2025-12-18 15:04 [COMMIT] (main)
-
-- Commit: `3f2a9c1`
-- Message: Fix bug
-- Ahead: 1 Behind: 0
-- Upstream: origin/main
-- Tags: v0.1.0
-- Journal: [[2025-12-18]]
-```
-
+If this is empty or unset, Foam Central uses the workspace folder’s name.
 
 ---
 
-### Notes Git Integration
+### `foamCentral.autoUpdateFolderIndex` (boolean, default: `true`)
 
-Foam Central can keep your **notes folder** automatically synced to a Git repository and (optionally) a private GitHub repo.
+When enabled:
 
-#### Command: Initialize Notes Git Repo
+* Whenever a new `*.md` file is created **inside the notes folder**, Foam Central:
 
-Use the command:
+  * checks whether that folder has an `index.md`
+  * if it does, adds a line `- [[NewNote]]` to that index (if not already present)
 
-> **Foam Central: Initialize Notes Git Repo**
+This applies only to `.md` files under `foamCentral.notesFolder`, and it ignores:
 
-This command:
+* `index.md` itself
+* folders such as `.git`, `.history`, `.vscode`
 
-1. Looks at your configured `foamCentral.notesFolder`.
-2. If the folder is **not** in a Git repo:
-
-   * Offers to run `git init` in the notes folder.
-   * Optionally makes an initial commit if there are existing files.
-   * Offers to create or link a **private GitHub repository** in the GitHub account you’re signed into in VS Code (e.g. `foam-notes`, `foam-notes-1`, `foam-notes-2`, …).
-   * Sets the `origin` remote and tries an initial `git push -u origin main`.
-3. If the folder **is already** in a Git repo:
-
-   * Offers to configure a **GitHub remote** for the existing repo (or reuse an existing one).
-4. Once the repo + remote are set up, it enables the automatic notes sync (see below).
-
-You can run this any time from the Command Palette.
+If disabled, Foam Central won’t touch `index.md` automatically.
 
 ---
 
-### Command: Sync Notes Now
+## Commands
 
-You can also manually force a sync at any time with:
+You can run these from the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`).
 
-> **Foam Central: Sync Notes Now**
+> Note: ID values below are how they appear in `package.json`.
 
-This will:
+### `Foam Central: Build Folder Indexes`
 
-1. Check for changes in the notes repo.
-2. If the remote has new commits (you’re behind), prompt you to pull before pushing.
-3. Stage and commit changes using the configured commit message template.
-4. Push the notes repo to its configured remote.
+**Command ID:** `foamCentral.buildFolderIndexes`
 
----
+Walks the entire notes tree under `foamCentral.notesFolder` and:
 
-### Notes Git Auto-Sync Settings
+* For each folder that contains `.md` files but **no** `index.md`:
 
-These settings live under **Settings → Extensions → Foam Central**:
+  * Creates an `index.md` with a simple bullet list:
 
-* `foamCentral.notesGit.autoSyncEnabled` (boolean, default: `false`)
-  Enable/disable automatic Git commit + push for the notes folder (if it’s inside a Git repo).
+    ```markdown
+    # Index for <relative/path>
 
-* `foamCentral.notesGit.saveCountThreshold` (number, default: `10`)
-  After this many **note saves** (in the notes folder), Foam Central will trigger an auto-sync (commit + push), if there are changes.
+    - [[NoteOne]]
+    - [[NoteTwo]]
+    ```
+* Skips:
 
-* `foamCentral.notesGit.minutesThreshold` (number, default: `10`)
-  Minimum number of **minutes between auto-syncs**. If there are uncommitted changes and this much time has passed since the last sync, an auto-sync will run even if you haven’t hit the save-count threshold.
+  * `.git`, `.history`, `.vscode`, and similar hidden folders.
 
-* `foamCentral.notesGit.commitMessage` (string, default:
-  `"Foam Central auto-commit ({reason})"`)
-  Template for auto-commit messages. The `{reason}` placeholder is replaced with:
-
-  * `save-threshold` (triggered by number of saves)
-  * `timer` (triggered by time threshold)
-  * `manual` (when you run **Sync Notes Now**)
-
-When auto-sync runs and the notes repo is **behind** its upstream (remote has new commits not in your local copy), Foam Central:
-
-1. Warns you that the remote is ahead.
-2. Offers to run a **fast-forward pull** (`git pull --ff-only`).
-3. Only commits + pushes if you either:
-
-   * Pull successfully, or
-   * Choose to skip and there’s no remote divergence.
-
-This avoids silently clobbering remote changes.
+This is intended as a one-time bootstrap (or occasional rebuilder). Ongoing maintenance for existing indices is handled by `foamCentral.autoUpdateFolderIndex`.
 
 ---
 
-### Troubleshooting: Foam onWillSaveTextDocument Error
-
-If you see an error like this in your logs:
-
-```text
-onWillSaveTextDocument-listener from extension 'foam.foam-vscode' threw ERROR
-TypeError: Cannot read properties of undefined (reading 'document')
-    at ...
-```
-
-This error is coming from the **Foam extension itself** (`foam.foam-vscode`), not from Foam Central.
-
-In practice:
-
-* Foam Central will continue to work normally (daily notes, project pages, Git sync).
-* The error is usually triggered by Foam’s own `onWillSaveTextDocument` handler when certain documents are saved.
-
-If it becomes noisy or disruptive, you can try:
-
-* Updating Foam to the latest version.
-* Temporarily disabling specific Foam features that run on save.
-* As a last resort, disabling the Foam extension for that workspace and relying on Foam Central’s features alone.
-
-Foam Central does **not** rely on Foam’s `onWillSaveTextDocument` hook, so the error does not affect its core behaviour.
-
----
-### Roadmap / Ideas
-
-- Smarter tagging of events (e.g. ```#code```, ```#review```, ```#meeting```).
-
-- Commands to open:
-
-    - Today’s daily note
-
-    - Current project’s home / VCS pages
-
-- Optional auto-linking into project-specific “log” notes per branch.
+*(If you have other Foam Central commands already implemented – e.g. “open today’s note” or “open project home” – you can add them here in the same style.)*
 
 ---
 
-### License
+## Behaviour summary
 
-This extension is licensed under the GNU General Public License, version 2 (GPL-2.0).
+* On activation:
 
+  * Reads `foamCentral.notesFolder`; if not set, logs an info message and does nothing.
+  * Identifies the “project folder” (prefers a workspace folder that is not the notes folder).
+  * Applies `foamCentral.projectNameOverride` (if set) to derive the project name + slug.
+  * Ensures:
+
+    * project notes directory `projects/<slug>/`
+    * `home.md` (with link to `vcs.md`)
+    * `vcs.md`
+
+* During the session:
+
+  * Logs project open / close events into daily notes.
+  * Optionally updates `index.md` in any folder that already has one when new notes appear there.
+
+---
+
+## License
+
+This extension is licensed under the **GPL v2** (or later, if you decide to phrase it that way).
+
+See `LICENSE` for full text.

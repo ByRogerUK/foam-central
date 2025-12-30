@@ -473,6 +473,7 @@ async function ensureProjectFiles(notesFolder: string, info: ProjectInfo): Promi
       '',
       `- Created: ${now.toISOString()}`,
       `- Default path: \`${info.path}\``,
+      `- VCS log: [[projects/${info.slug}/vcs]]`,
       '',
       '## Activity',
       ''
@@ -495,6 +496,8 @@ async function ensureProjectFiles(notesFolder: string, info: ProjectInfo): Promi
     ];
     await fsp.writeFile(info.vcsPath, contentLines.join('\n'), { encoding: 'utf8' });
   }
+  await maybeUpdateFolderIndexForFile(vscode.Uri.file(info.homePath));
+  await maybeUpdateFolderIndexForFile(vscode.Uri.file(info.vcsPath))
 }
 
 /* ---------- Logging project open ---------- */
@@ -693,7 +696,9 @@ async function initProjectTelemetry(): Promise<void> {
   }
 
   const projectFolderPath = projectFolder.uri.fsPath;
-  const projectName = path.basename(projectFolderPath);
+
+  // Use override (foamCentral.projectNameOverride) if set, otherwise folder name
+  const projectName = getProjectLabel(projectFolder);
   const slug = projectName.replace(/\s+/g, '_');
 
   const projectNotesRoot = path.join(notesFolder, getProjectNotesFolderName(), slug);
@@ -1183,9 +1188,9 @@ async function ensureNotesRemoteOnGitHub(notesRepoPath: string): Promise<void> {
     if (createResp.status !== 201) {
       vscode.window.showErrorMessage(
         'Foam Central: failed to create GitHub repo. Status ' +
-          createResp.status +
-          '. ' +
-          (createResp.data && (createResp.data.message || ''))
+        createResp.status +
+        '. ' +
+        (createResp.data && (createResp.data.message || ''))
       );
       return;
     }
@@ -1234,14 +1239,14 @@ async function ensureNotesRemoteOnGitHub(notesRepoPath: string): Promise<void> {
     } catch (err: any) {
       vscode.window.showWarningMessage(
         'Foam Central: repository was linked to GitHub, but initial push failed. ' +
-          'You may need to resolve this manually via Git.\n' +
-          (err.stderr || err.message || String(err))
+        'You may need to resolve this manually via Git.\n' +
+        (err.stderr || err.message || String(err))
       );
     }
   } catch (err: any) {
     vscode.window.showErrorMessage(
       'Foam Central: failed to configure GitHub remote: ' +
-        (err.stderr || err.message || String(err))
+      (err.stderr || err.message || String(err))
     );
   }
 }
@@ -1286,6 +1291,32 @@ export async function activate(context: vscode.ExtensionContext) {
     )
   );
 
+  // Watch for new markdown files and update folder index if needed
+  const mdWatcher = vscode.workspace.createFileSystemWatcher('**/*.md');
+
+  mdWatcher.onDidCreate(async (uri) => {
+    try {
+      await maybeUpdateFolderIndexForFile(uri);
+    } catch (err) {
+      logChannel.appendLine(`maybeUpdateFolderIndexForFile error: ${String(err)}`);
+    }
+  });
+
+  context.subscriptions.push(mdWatcher);
+
+  const buildIndexesCmd = vscode.commands.registerCommand(
+    'foamCentral.buildFolderIndexes',
+    async () => {
+      try {
+        await buildFolderIndexes();
+      } catch (err) {
+        vscode.window.showErrorMessage('Foam Central: Failed to build folder indexes: ' + String(err));
+      }
+    }
+  );
+
+  context.subscriptions.push(buildIndexesCmd);
+
   (async () => {
     try {
       logChannel.appendLine('initProjectTelemetry() starting');
@@ -1318,4 +1349,161 @@ export async function deactivate(): Promise<void> {
   }
   // We intentionally do NOT try to log "CLOSE" here because VS Code often
   // cancels async work at shutdown, which just creates noisy errors.
+}
+
+function getProjectLabel(folder: vscode.WorkspaceFolder): string {
+  const config = vscode.workspace.getConfiguration('foamCentral', folder.uri);
+  const override = (config.get<string>('projectNameOverride') || '').trim();
+  if (override.length > 0) {
+    return override;
+  }
+  return folder.name;
+}
+
+async function maybeUpdateFolderIndexForFile(fileUri: vscode.Uri): Promise<void> {
+  // Check global flag
+  const config = vscode.workspace.getConfiguration('foamCentral');
+  const auto = config.get<boolean>('autoUpdateFolderIndex', true);
+  if (!auto) {
+    return;
+  }
+
+  const notesFolder = getNotesFolder();
+  if (!notesFolder) {
+    return;
+  }
+
+  const filePath = fileUri.fsPath;
+
+  // Only handle markdown files
+  if (!filePath.toLowerCase().endsWith('.md')) {
+    return;
+  }
+
+  const dir = path.dirname(filePath);
+  const fileName = path.basename(filePath);
+
+  // Skip the index file itself
+  if (fileName.toLowerCase() === 'index.md') {
+    return;
+  }
+
+  // Only operate inside the notes tree
+  const notesNorm = normalizePath(notesFolder);
+  const dirNorm = normalizePath(dir);
+  if (!dirNorm.startsWith(notesNorm)) {
+    return;
+  }
+
+  const indexPath = path.join(dir, 'index.md');
+
+  // Only update if index.md already exists in that folder
+  try {
+    await fsp.access(indexPath);
+  } catch {
+    return; // no index in this folder, nothing to do
+  }
+
+  let content = await fsp.readFile(indexPath, { encoding: 'utf8' });
+
+  const baseName = path.basename(fileName, '.md');
+
+  // Escape for regex: [[basename]]
+  const escaped = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const linkPattern = new RegExp(`\\[\\[${escaped}\\]\\]`);
+
+  if (linkPattern.test(content)) {
+    // Already linked
+    return;
+  }
+
+  if (!content.endsWith('\n')) {
+    content += '\n';
+  }
+
+  // Simple bullet list entry using wiki link
+  content += `- [[${baseName}]]\n`;
+
+  await fsp.writeFile(indexPath, content, { encoding: 'utf8' });
+}
+
+async function buildFolderIndexes(): Promise<void> {
+  const notesFolder = getNotesFolder();
+  if (!notesFolder) {
+    vscode.window.showWarningMessage('Foam Central: Notes folder is not configured.');
+    return;
+  }
+
+  const rootDir = notesFolder;
+  let createdCount = 0;
+
+  async function walk(dir: string): Promise<void> {
+    const entries = await fsp.readdir(dir, { withFileTypes: true });
+
+    const mdFiles: string[] = [];
+    const subdirs: string[] = [];
+
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        const nameLower = entry.name.toLowerCase();
+        // Skip some noise folders
+        if (nameLower === '.git' || nameLower === '.history' || nameLower === '.vscode') {
+          continue;
+        }
+        subdirs.push(path.join(dir, entry.name));
+      } else if (entry.isFile()) {
+        const ext = path.extname(entry.name).toLowerCase();
+        if (ext === '.md' && entry.name.toLowerCase() !== 'index.md') {
+          mdFiles.push(entry.name);
+        }
+      }
+    }
+
+    // Recurse first so we process subfolders too
+    for (const sub of subdirs) {
+      await walk(sub);
+    }
+
+    if (mdFiles.length === 0) {
+      return;
+    }
+
+    const indexPath = path.join(dir, 'index.md');
+
+    // Only create if index.md doesn't exist
+    try {
+      await fsp.access(indexPath);
+      // index already exists; leave it alone
+      return;
+    } catch {
+      // no index, we'll create one
+    }
+
+    mdFiles.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+
+    const rel = path.relative(rootDir, dir) || '.';
+    const title =
+      rel === '.'
+        ? 'Notes Index'
+        : `Index for ${rel.replace(/\\/g, '/')}`;
+
+    const lines: string[] = [
+      `# ${title}`,
+      '',
+      ...mdFiles.map((fname) => {
+        const base = path.basename(fname, '.md');
+        return `- [[${base}]]`;
+      }),
+      ''
+    ];
+
+    await fsp.writeFile(indexPath, lines.join('\n'), { encoding: 'utf8' });
+    createdCount++;
+  }
+
+  await walk(rootDir);
+
+  vscode.window.showInformationMessage(
+    `Foam Central: Created ${createdCount} index.md file(s) under the notes folder.`
+  );
 }
